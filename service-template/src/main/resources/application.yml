@@ -1,0 +1,5 @@
+spring:
+  config:
+    import: "classpath:application-common.yml"
+  application:
+    name: service-template

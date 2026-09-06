@@ -1,0 +1,224 @@
+# Distributed Financial Transaction Platform (DFTP)
+
+# ------------------------------------------------------------------------------
+# 1. SECURITY & CREDENTIALS (Zero-Leakage Policy for Financial Systems)
+# ------------------------------------------------------------------------------
+# Environment variable files
+.env
+.env.*
+*.env
+# Whitelist template/example configuration files
+!.env.example
+!.env.*.example
+!*.env.example
+
+# Cryptographic private keys, certificates, keystores & tokens
+*.pem
+*.key
+*.pk8
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.cer
+*.crt
+*.der
+*.csr
+
+# Local credentials, secrets & SSH keys
+secrets/
+**/secrets/
+credentials/
+**/credentials/
+id_rsa*
+id_ed25519*
+
+# Sensitive local Kafka JAAS & authentication configs
+config/kafka/*.conf
+!config/kafka/*.example
+!config/kafka/*.conf.example
+
+# ------------------------------------------------------------------------------
+# 2. JAVA & JVM RUNTIME ARTIFACTS
+# ------------------------------------------------------------------------------
+# Compiled class files
+*.class
+*.ctxt
+
+# JVM Crash logs & Flight Recorder dumps
+hs_err_pid*
+replay_pid*
+*.hprof
+*.dump
+*.jfr
+.attach_pid*
+
+# Package archives (allow Maven to generate them in target/ only)
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+# Whitelist wrapper jars if added in the future
+!/.mvn/wrapper/maven-wrapper.jar
+!/gradle/wrapper/gradle-wrapper.jar
+
+# ------------------------------------------------------------------------------
+# 3. BUILD TOOLS: APACHE MAVEN (Multi-Module)
+# ------------------------------------------------------------------------------
+target/
+**/target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.flattened-pom.xml
+.mvn/timing.properties
+
+# ------------------------------------------------------------------------------
+# 4. BUILD TOOLS: GRADLE (if applicable)
+# ------------------------------------------------------------------------------
+.gradle/
+**/build/
+
+# ------------------------------------------------------------------------------
+# 5. IDEs & TEXT EDITORS
+# ------------------------------------------------------------------------------
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+**/out/
+.idea_modules/
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+.history/
+.ionide/
+
+# Eclipse
+.apt_generated/
+.classpath
+.factorypath
+.project
+.settings/
+.springBeans
+bin/
+**/bin/
+
+# NetBeans
+nbproject/private/
+nbbuild/
+dist/
+nbdist/
+.nb-gradle/
+
+# Editor swap, backup and temporary files
+*~
+*.swp
+*.swo
+*.bak
+.*.sw?
+
+# ------------------------------------------------------------------------------
+# 6. OPERATING SYSTEM ARTIFACTS
+# ------------------------------------------------------------------------------
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# Linux
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ------------------------------------------------------------------------------
+# 7. LOGS & RUNTIME STORAGE
+# ------------------------------------------------------------------------------
+logs/
+**/logs/
+*.log
+*.out
+
+# ------------------------------------------------------------------------------
+# 8. LOCAL DATABASES, MESSAGE QUEUES & DOCKER VOLUMES
+# ------------------------------------------------------------------------------
+# Explicit container volume folders at root
+/data/
+/.data/
+/pgdata/
+/postgres_data/
+/postgres_prod_data/
+/kafka_data/
+/kafka_prod_data/
+/zookeeper_data/
+
+# Local database dumps and files
+*.db
+*.sqlite
+*.sqlite3
+*.rdb
+
+# ------------------------------------------------------------------------------
+# 9. CODE COVERAGE, PROFILING & TEST REPORTS
+# ------------------------------------------------------------------------------
+# JaCoCo
+*.exec
+jacoco.exec
+jacoco-it.exec
+
+# SonarQube
+.sonar/
+.scannerwork/
+
+# Test output
+test-output/
+coverage/
+
+# ------------------------------------------------------------------------------
+# 10. PYTHON & SCRIPTS ARTIFACTS (Local tooling / test scripts)
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# ------------------------------------------------------------------------------
+# 11. TEMPORARY & SCRATCH FILES
+# ------------------------------------------------------------------------------
+tmp/
+**/tmp/
+temp/
+**/temp/
+scratch/
+**/scratch/
+*.tmp
