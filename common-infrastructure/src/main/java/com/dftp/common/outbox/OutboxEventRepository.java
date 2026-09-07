@@ -18,4 +18,6 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
     long countByStatus(String status);
 
     boolean existsByStatusAndCreatedAtBefore(String status, java.time.Instant cutoff);
+
+    List<OutboxEvent> findByStatusAndCreatedAtBefore(String status, java.time.Instant cutoff);
 }

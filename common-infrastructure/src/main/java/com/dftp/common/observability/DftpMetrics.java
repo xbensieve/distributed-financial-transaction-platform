@@ -139,10 +139,71 @@ public class DftpMetrics {
         getOrCreateCounter("api.idempotency.collision", Tags.of("endpoint", sanitize(endpoint))).increment();
     }
 
+    // --- Batch Settlement Telemetry ---
+
+    public void recordBatchStarted(String type) {
+        getOrCreateCounter("batch.started", Tags.of("type", sanitize(type))).increment();
+    }
+
+    public void recordBatchCompleted(String type) {
+        getOrCreateCounter("batch.completed", Tags.of("type", sanitize(type))).increment();
+    }
+
+    public void recordBatchFailed(String type, String reason) {
+        getOrCreateCounter("batch.failed", Tags.of("type", sanitize(type), "reason", sanitize(reason))).increment();
+    }
+
+    public void recordBatchItems(String type, int count) {
+        getOrCreateCounter("batch.items", Tags.of("type", sanitize(type))).increment(count);
+    }
+
+    public void recordBatchItemsSuccess(String type, int count) {
+        getOrCreateCounter("batch.items.success", Tags.of("type", sanitize(type))).increment(count);
+    }
+
+    public void recordBatchItemsFailed(String type, String reason, int count) {
+        getOrCreateCounter("batch.items.failed", Tags.of("type", sanitize(type), "reason", sanitize(reason))).increment(count);
+    }
+
+    public void recordBatchRetry(String type) {
+        getOrCreateCounter("batch.retry", Tags.of("type", sanitize(type))).increment();
+    }
+
+    public void recordBatchDuration(String type, String outcome, Duration duration) {
+        getOrCreateTimer("batch.duration", Tags.of("type", sanitize(type), "outcome", sanitize(outcome)))
+                .record(duration);
+    }
+
+    // --- Settlement Telemetry ---
+
+    public void recordSettlementSuccess() {
+        getOrCreateCounter("settlement.success", Tags.empty()).increment();
+    }
+
+    public void recordSettlementFailed(String reason) {
+        getOrCreateCounter("settlement.failed", Tags.of("reason", sanitize(reason))).increment();
+    }
+
+    public void recordSettlementRetry() {
+        getOrCreateCounter("settlement.retry", Tags.empty()).increment();
+    }
+
     // --- Reconciliation Telemetry ---
+
+    public void recordReconciliationScanned(int count) {
+        getOrCreateCounter("reconciliation.scanned", Tags.empty()).increment(count);
+    }
 
     public void recordReconciliationAnomaly(String anomalyType) {
         getOrCreateCounter("reconciliation.anomaly", Tags.of("anomaly_type", sanitize(anomalyType))).increment();
+    }
+
+    public void recordReconciliationCritical(String anomalyType) {
+        getOrCreateCounter("reconciliation.critical", Tags.of("anomaly_type", sanitize(anomalyType))).increment();
+    }
+
+    public void recordReconciliationResolved(String resolutionType) {
+        getOrCreateCounter("reconciliation.resolved", Tags.of("resolution_type", sanitize(resolutionType))).increment();
     }
 
     // --- Rate Limiting Metrics ---

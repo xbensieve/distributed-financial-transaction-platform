@@ -1,15 +1,31 @@
 package com.dftp.account.domain;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-import org.springframework.data.jpa.repository.Modifying;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.transaction.annotation.Transactional;
-
 public interface AccountOperationRepository extends JpaRepository<AccountOperation, UUID> {
+    List<AccountOperation> findByTransactionId(String transactionId);
+
+    List<AccountOperation> findByAccountId(UUID accountId);
+
     Optional<AccountOperation> findByTransactionIdAndOperationTypeAndAccountId(String transactionId, String operationType, UUID accountId);
+
+    List<AccountOperation> findByTransactionIdIn(Collection<String> transactionIds);
+
+    @Query("SELECT o FROM AccountOperation o WHERE o.operationType = 'HOLD' AND o.createdAt < :cutoff " +
+           "AND NOT EXISTS (SELECT 1 FROM AccountOperation o2 WHERE o2.transactionId = o.transactionId AND o2.operationType IN ('SETTLE', 'COMPENSATE')) " +
+           "ORDER BY o.createdAt ASC, o.id ASC")
+    List<AccountOperation> findOrphanHoldCandidates(@Param("cutoff") Instant cutoff, Pageable pageable);
 
     @Modifying
     @Transactional
