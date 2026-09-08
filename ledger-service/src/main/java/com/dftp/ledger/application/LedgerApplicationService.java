@@ -15,6 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import com.dftp.common.observability.DftpMetrics;
+import com.dftp.common.observability.TraceContextPropagator;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -120,6 +121,7 @@ public class LedgerApplicationService {
                     .payload(outboxPayload)
                     .build();
 
+            var traceMetadata = TraceContextPropagator.currentTraceMetadata().orElse(null);
             OutboxEvent outboxEvent = OutboxEvent.builder()
                     .id(outboxEnvelope.getEventId())
                     .aggregateType("ledger-events")
@@ -127,6 +129,8 @@ public class LedgerApplicationService {
                     .eventType(outboxEnvelope.getEventType())
                     .status("PENDING")
                     .payload(objectMapper.writeValueAsString(outboxEnvelope))
+                    .traceparent(traceMetadata != null ? traceMetadata.traceparent() : null)
+                    .tracestate(traceMetadata != null ? traceMetadata.tracestate() : null)
                     .build();
 
             outboxEventRepository.save(outboxEvent);

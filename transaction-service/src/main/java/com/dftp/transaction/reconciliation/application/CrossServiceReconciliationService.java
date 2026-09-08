@@ -25,6 +25,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -62,6 +63,7 @@ public class CrossServiceReconciliationService {
      * Controlled by property 'dftp.reconciliation.scan-cron'. Default disabled ('-').
      */
     @Scheduled(cron = "${dftp.reconciliation.scan-cron:-}")
+    @SchedulerLock(name = "CrossServiceReconciliationService_scheduledReconciliationScan", lockAtMostFor = "PT15M", lockAtLeastFor = "PT30S")
     public void scheduledReconciliationScan() {
         log.info("Executing scheduled cross-service reconciliation scan...");
         try {

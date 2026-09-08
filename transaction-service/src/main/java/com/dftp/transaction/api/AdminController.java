@@ -32,6 +32,7 @@ public class AdminController {
     private final SecurityAuditService securityAuditService;
     private final com.dftp.transaction.security.DistributedDltCooldownService distributedDltCooldownService;
     private final com.dftp.transaction.reconciliation.ReconciliationScannerService reconciliationScannerService;
+    private final com.dftp.transaction.application.StalledSagaRecoveryService stalledSagaRecoveryService;
 
     private static final Set<String> ALLOWED_TOPICS = Set.of(
             "transaction-events",
@@ -125,5 +126,27 @@ public class AdminController {
                 java.time.Duration.ofSeconds(outboxThresholdSeconds)
         );
         return ResponseEntity.ok(report);
+    }
+
+    @PostMapping("/saga/stalled/{transactionId}/compensate")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<com.dftp.transaction.api.dto.StalledSagaCompensationResponse> compensateStalledSaga(
+            @PathVariable String transactionId,
+            @RequestParam String reason,
+            @RequestHeader(value = "X-Correlation-Id", required = false) String correlationId,
+            HttpServletRequest request) {
+
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String principal = (auth != null) ? auth.getName() : "ANONYMOUS";
+        String roles = (auth != null) ? auth.getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority)
+                .collect(Collectors.joining(",")) : "";
+        String clientIp = request.getRemoteAddr();
+
+        com.dftp.transaction.api.dto.StalledSagaCompensationResponse response =
+                stalledSagaRecoveryService.compensateStalledSaga(
+                        transactionId, reason, principal, roles, clientIp, correlationId);
+
+        return ResponseEntity.ok(response);
     }
 }

@@ -1,0 +1,192 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transaction-service
+  namespace: dftp
+  labels:
+    app: transaction-service
+    app.kubernetes.io/name: transaction-service
+    app.kubernetes.io/part-of: distributed-financial-transaction-platform
+    app.kubernetes.io/component: transaction-orchestrator
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: transaction-service
+  template:
+    metadata:
+      labels:
+        app: transaction-service
+        app.kubernetes.io/name: transaction-service
+        app.kubernetes.io/part-of: distributed-financial-transaction-platform
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/actuator/prometheus"
+        prometheus.io/port: "8080"
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - transaction-service
+                topologyKey: "kubernetes.io/hostname"
+            - weight: 50
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - transaction-service
+                topologyKey: "topology.kubernetes.io/zone"
+      containers:
+        - name: transaction-service
+          image: dftp/transaction-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+            - containerPort: 8081
+              name: management
+              protocol: TCP
+          env:
+            # JVM Memory & Container Garbage Collection Tuning
+            - name: JAVA_TOOL_OPTIONS
+              value: >-
+                -XX:+UseContainerSupport
+                -XX:MaxRAMPercentage=75.0
+                -XX:InitialRAMPercentage=50.0
+                -XX:+UseG1GC
+                -XX:+ExplicitGCInvokesConcurrent
+                -XX:+ExitOnOutOfMemoryError
+                -Djava.security.egd=file:/dev/./urandom
+            # Active Spring Profile
+            - name: SPRING_PROFILES_ACTIVE
+              value: "prod"
+            # Database Configuration & Secret Ingestion
+            - name: SPRING_DATASOURCE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: dftp-db-credentials
+                  key: TRANSACTION_DB_URL
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: dftp-db-credentials
+                  key: POSTGRES_USER
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dftp-db-credentials
+                  key: POSTGRES_PASSWORD
+            # HikariCP Connection Pool Settings
+            - name: SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE
+              value: "25"
+            - name: SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE
+              value: "10"
+            - name: SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT
+              value: "5000"
+            - name: SPRING_DATASOURCE_HIKARI_LEAK_DETECTION_THRESHOLD
+              value: "10000"
+            # Distributed ShedLock Configuration
+            - name: DFTP_SHEDLOCK_ENABLED
+              value: "true"
+            # Kafka Connectivity & Security
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              valueFrom:
+                secretKeyRef:
+                  name: dftp-kafka-secrets
+                  key: KAFKA_BOOTSTRAP_SERVERS
+            - name: SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL
+              valueFrom:
+                secretKeyRef:
+                  name: dftp-kafka-secrets
+                  key: KAFKA_SECURITY_PROTOCOL
+            - name: SPRING_KAFKA_PROPERTIES_SASL_MECHANISM
+              valueFrom:
+                secretKeyRef:
+                  name: dftp-kafka-secrets
+                  key: KAFKA_SASL_MECHANISM
+            - name: SPRING_KAFKA_PROPERTIES_SASL_JAAS_CONFIG
+              valueFrom:
+                secretKeyRef:
+                  name: dftp-kafka-secrets
+                  key: KAFKA_SASL_JAAS_CONFIG
+            # Kafka Producer Performance Tuning
+            - name: SPRING_KAFKA_PRODUCER_PROPERTIES_LINGER_MS
+              value: "5"
+            - name: SPRING_KAFKA_PRODUCER_PROPERTIES_BATCH_SIZE
+              value: "32768"
+            - name: SPRING_KAFKA_PRODUCER_PROPERTIES_COMPRESSION_TYPE
+              value: "lz4"
+            # Pod Identity for Worker Outbox Stamping
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "2Gi"
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 45
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 25
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 10"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: transaction-service
+  namespace: dftp
+  labels:
+    app: transaction-service
+    app.kubernetes.io/name: transaction-service
+    app.kubernetes.io/part-of: distributed-financial-transaction-platform
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+      protocol: TCP
+    - port: 8081
+      targetPort: 8081
+      name: management
+      protocol: TCP
+  selector:
+    app: transaction-service

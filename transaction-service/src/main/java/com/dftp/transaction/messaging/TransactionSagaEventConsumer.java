@@ -14,6 +14,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import com.dftp.common.observability.TraceContextPropagator;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Service;
@@ -34,7 +36,10 @@ public class TransactionSagaEventConsumer {
 
     @KafkaListener(topics = {"account-events", "ledger-events"}, groupId = "transaction-service-saga-group")
     @Transactional
-    public void consume(String message, Acknowledgment acknowledgment) throws Exception {
+    public void consume(ConsumerRecord<String, String> record, Acknowledgment acknowledgment) throws Exception {
+        String message = record.value();
+        TraceContextPropagator.extractFromKafkaHeaders(record.headers())
+                .ifPresent(TraceContextPropagator::populateMdc);
         try {
             JsonNode rootNode = objectMapper.readTree(message);
             JsonNode eventTypeNode = rootNode.get("eventType");
@@ -132,7 +137,12 @@ public class TransactionSagaEventConsumer {
             log.error("Failed to process saga event", e);
             throw e;
         } finally {
+            TraceContextPropagator.clearMdc();
             MDC.clear();
         }
+    }
+
+    public void consume(String message, Acknowledgment acknowledgment) throws Exception {
+        consume(new ConsumerRecord<>("saga-events", 0, 0L, null, message), acknowledgment);
     }
 }

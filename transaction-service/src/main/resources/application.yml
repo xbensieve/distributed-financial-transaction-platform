@@ -42,6 +42,8 @@ spring:
       ack-mode: manual_immediate
 
 dftp:
+  shedlock:
+    enabled: true
   outbox:
     relay:
       enabled: true

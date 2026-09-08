@@ -21,8 +21,8 @@ import org.testcontainers.utility.DockerImageName;
  */
 public abstract class AbstractTransactionIntegrationTest {
 
-    static final PostgreSQLContainer<?> postgres;
-    static final KafkaContainer kafka;
+    public static final PostgreSQLContainer<?> postgres;
+    public static final KafkaContainer kafka;
 
     static {
         postgres = new PostgreSQLContainer<>("postgres:16-alpine")

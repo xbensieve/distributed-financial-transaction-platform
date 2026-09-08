@@ -19,7 +19,10 @@ import com.dftp.transaction.domain.Transaction;
 import com.dftp.transaction.domain.TransactionRepository;
 import com.dftp.transaction.domain.ApiIdempotencyKey;
 import com.dftp.transaction.domain.ApiIdempotencyKeyRepository;
+import com.dftp.common.observability.TraceContextPropagator;
+import com.dftp.common.kafka.AccountPartitionStrategy;
 import com.dftp.transaction.api.dto.TransactionResponse;
+import com.dftp.transaction.backpressure.OutboxBackpressureService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -43,6 +46,7 @@ public class TransactionApplicationService {
     private final OutboxEventRepository outboxEventRepository;
     private final ApiIdempotencyKeyRepository apiIdempotencyKeyRepository;
     private final ObjectMapper objectMapper;
+    private final OutboxBackpressureService outboxBackpressureService;
 
     @Autowired(required = false)
     private DftpMetrics dftpMetrics = new DftpMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
@@ -68,6 +72,11 @@ public class TransactionApplicationService {
             } catch (Exception e) {
                 throw new RuntimeException("Failed to deserialize cached response", e);
             }
+        }
+
+        // Admission control: reject before writing any database row or initiating financial saga
+        if (outboxBackpressureService != null) {
+            outboxBackpressureService.checkAdmission();
         }
 
         // Lock key
@@ -172,7 +181,8 @@ public class TransactionApplicationService {
                 .payload(payload)
                 .build();
 
-        publishOutboxEvent(envelope, transaction.getId().toString(), "transaction-events");
+        String partitionKey = AccountPartitionStrategy.resolvePartitionKey(transaction.getSourceAccountId().toString(), transaction.getTransactionId().toString());
+        publishOutboxEvent(envelope, partitionKey, "transaction-events");
         log.info("Created transaction {} and requested FundsHold", transaction.getId());
         
         TransactionResponse response = TransactionResponse.builder()
@@ -216,7 +226,8 @@ public class TransactionApplicationService {
                 .build();
 
         EventEnvelope<LedgerPostRequested> nextEnvelope = buildNextEnvelope(envelope, "LedgerPostRequested", payload);
-        publishOutboxEvent(nextEnvelope, tx.getId().toString(), "transaction-events");
+        String partitionKey = AccountPartitionStrategy.resolvePartitionKey(tx.getSourceAccountId().toString(), tx.getTransactionId().toString());
+        publishOutboxEvent(nextEnvelope, partitionKey, "transaction-events");
         log.info("Transaction {} updated to SOURCE_HELD, requested LedgerPost", tx.getTransactionId());
     }
 
@@ -253,7 +264,8 @@ public class TransactionApplicationService {
                 .build();
 
         EventEnvelope<FundsSettlementRequested> nextEnvelope = buildNextEnvelope(envelope, "FundsSettlementRequested", payload);
-        publishOutboxEvent(nextEnvelope, tx.getId().toString(), "transaction-events");
+        String partitionKey = AccountPartitionStrategy.resolvePartitionKey(tx.getSourceAccountId().toString(), tx.getTransactionId().toString());
+        publishOutboxEvent(nextEnvelope, partitionKey, "transaction-events");
         log.info("Transaction {} updated to LEDGER_POSTED, requested FundsSettlement", tx.getTransactionId());
     }
 
@@ -273,7 +285,8 @@ public class TransactionApplicationService {
                 .build();
 
         EventEnvelope<HoldCompensationRequested> nextEnvelope = buildNextEnvelope(envelope, "HoldCompensationRequested", payload);
-        publishOutboxEvent(nextEnvelope, tx.getId().toString(), "transaction-events");
+        String partitionKey = AccountPartitionStrategy.resolvePartitionKey(tx.getSourceAccountId().toString(), tx.getTransactionId().toString());
+        publishOutboxEvent(nextEnvelope, partitionKey, "transaction-events");
         log.info("Transaction {} updated to COMPENSATING, requested HoldCompensation due to Ledger rejection", tx.getTransactionId());
     }
 
@@ -345,6 +358,10 @@ public class TransactionApplicationService {
                 .payload(serializeEnvelope(envelope))
                 .status("PENDING")
                 .build();
+        TraceContextPropagator.currentTraceMetadata().ifPresent(tm -> {
+            outboxEvent.setTraceparent(tm.traceparent());
+            outboxEvent.setTracestate(tm.tracestate());
+        });
         outboxEventRepository.save(outboxEvent);
     }
 

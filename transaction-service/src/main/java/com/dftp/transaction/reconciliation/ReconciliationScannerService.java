@@ -8,7 +8,9 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -46,6 +48,17 @@ public class ReconciliationScannerService {
         private int transactionStuckPendingCount;
         private int stalledOutboxCount;
         private List<String> anomalySummaries;
+    }
+
+    @Scheduled(cron = "${dftp.reconciliation.anomaly-scan-cron:-}")
+    @SchedulerLock(name = "ReconciliationScannerService_scheduledAnomalyScan", lockAtMostFor = "PT15M", lockAtLeastFor = "PT30S")
+    public void scheduledAnomalyScan() {
+        log.info("Executing scheduled read-only reconciliation anomaly scan...");
+        try {
+            scanForAnomalies(SAGA_STUCK_THRESHOLD, OUTBOX_STALLED_THRESHOLD);
+        } catch (Exception e) {
+            log.error("Scheduled read-only reconciliation anomaly scan failed: {}", e.getMessage(), e);
+        }
     }
 
     @Transactional(readOnly = true)

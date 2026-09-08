@@ -57,6 +57,15 @@ public class OutboxEvent {
     @Column(name = "error_message")
     private String errorMessage;
 
+    @Column(name = "traceparent", length = 128)
+    private String traceparent;
+
+    @Column(name = "tracestate", length = 256)
+    private String tracestate;
+
+    @Column(name = "claimed_by", length = 128)
+    private String claimedBy;
+
     @PreUpdate
     protected void onUpdate() {
         this.updatedAt = Instant.now();

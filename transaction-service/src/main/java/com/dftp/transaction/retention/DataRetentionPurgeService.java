@@ -5,6 +5,7 @@ import com.dftp.transaction.settlement.repository.SettlementBatchItemRepository;
 import com.dftp.transaction.settlement.repository.SettlementBatchRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -55,6 +56,7 @@ public class DataRetentionPurgeService {
      * Daily scheduled purge job (runs at 02:00 UTC by default).
      */
     @Scheduled(cron = "${dftp.retention.purge-cron:0 0 2 * * ?}")
+    @SchedulerLock(name = "DataRetentionPurgeService_runScheduledPurge", lockAtMostFor = "PT30M", lockAtLeastFor = "PT1M")
     public void runScheduledPurge() {
         log.info("Starting scheduled data retention purge job...");
         int purgedItems = purgeSettlementItems(Duration.ofDays(settlementRetentionDays), DEFAULT_CHUNK_SIZE);

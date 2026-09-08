@@ -120,4 +120,19 @@ public class TransactionController {
                 principal, transaction.getTransactionId(), transaction.getOwnerId());
         throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Transaction not found");
     }
+
+    @ExceptionHandler(com.dftp.transaction.backpressure.OutboxAdmissionThrottledException.class)
+    public ResponseEntity<com.dftp.common.error.ApiError> handleAdmissionThrottled(
+            com.dftp.transaction.backpressure.OutboxAdmissionThrottledException e,
+            jakarta.servlet.http.HttpServletRequest request) {
+        log.warn("Transaction admission throttled for request {}: {}", request.getRequestURI(), e.getMessage());
+        com.dftp.common.error.ApiError apiError = com.dftp.common.error.ApiError.builder()
+                .errorCode("OUTBOX_ADMISSION_THROTTLED")
+                .message(e.getMessage())
+                .path(request.getRequestURI())
+                .build();
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(org.springframework.http.HttpHeaders.RETRY_AFTER, String.valueOf(e.getRetryAfterSeconds()))
+                .body(apiError);
+    }
 }

@@ -1,0 +1,57 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-transaction-service
+  namespace: dftp
+  labels:
+    app: transaction-service
+    app.kubernetes.io/part-of: distributed-financial-transaction-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: transaction-service
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    # Metric 1: CPU Utilization Threshold (70%)
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    # Metric 2: Memory Utilization Threshold (80%)
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+    # Metric 3: Custom Prometheus Metric (Outbox Processing Lag)
+    # Scaled by Prometheus Adapter translating 'dftp_outbox_lag_seconds' into custom.metrics.k8s.io
+    - type: Pods
+      pods:
+        metric:
+          name: dftp_outbox_lag_seconds
+        target:
+          type: AverageValue
+          averageValue: "10" # Scale up if average outbox lag exceeds 10 seconds
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 2
+          periodSeconds: 15
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300 # 5 minutes cooldown to prevent flapping/thrashing
+      policies:
+        - type: Percent
+          value: 20
+          periodSeconds: 60
+      selectPolicy: Min

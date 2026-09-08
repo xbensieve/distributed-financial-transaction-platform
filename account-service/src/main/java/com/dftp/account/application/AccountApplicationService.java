@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import com.dftp.common.observability.DftpMetrics;
+import com.dftp.common.observability.TraceContextPropagator;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -243,6 +244,7 @@ public class AccountApplicationService {
     }
 
     private void publishOutboxEvent(EventEnvelope<?> envelope, String aggregateId, String aggregateType) {
+        var traceMetadata = TraceContextPropagator.currentTraceMetadata().orElse(null);
         OutboxEvent outboxEvent = OutboxEvent.builder()
                 .id(envelope.getEventId())
                 .aggregateType(aggregateType)
@@ -250,6 +252,8 @@ public class AccountApplicationService {
                 .eventType(envelope.getEventType())
                 .payload(serializeEnvelope(envelope))
                 .status("PENDING")
+                .traceparent(traceMetadata != null ? traceMetadata.traceparent() : null)
+                .tracestate(traceMetadata != null ? traceMetadata.tracestate() : null)
                 .build();
         outboxEventRepository.save(outboxEvent);
     }

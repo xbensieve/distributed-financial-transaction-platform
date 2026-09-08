@@ -212,6 +212,16 @@ public class DftpMetrics {
         getOrCreateCounter("rate.limit.exceeded", Tags.of("tier", sanitize(tier))).increment();
     }
 
+    // --- Outbox Backpressure Metrics ---
+
+    public void recordBackpressureRejection() {
+        getOrCreateCounter("outbox.backpressure.rejections", Tags.empty()).increment();
+    }
+
+    public void setBackpressureState(int stateCode) {
+        getOrCreateGauge("outbox.backpressure.state", Tags.empty()).set(stateCode);
+    }
+
     // --- Helpers ---
 
     private Counter getOrCreateCounter(String name, Iterable<Tag> tags) {

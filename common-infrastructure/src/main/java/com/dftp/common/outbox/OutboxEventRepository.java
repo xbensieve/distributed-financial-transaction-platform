@@ -20,4 +20,6 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
     boolean existsByStatusAndCreatedAtBefore(String status, java.time.Instant cutoff);
 
     List<OutboxEvent> findByStatusAndCreatedAtBefore(String status, java.time.Instant cutoff);
+
+    List<OutboxEvent> findByAggregateTypeAndAggregateIdOrderByCreatedAtAsc(String aggregateType, String aggregateId);
 }

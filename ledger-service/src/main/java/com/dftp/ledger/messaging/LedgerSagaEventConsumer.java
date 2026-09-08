@@ -14,6 +14,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import com.dftp.common.observability.TraceContextPropagator;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Service;
@@ -37,6 +39,14 @@ public class LedgerSagaEventConsumer {
 
     @KafkaListener(topics = "transaction-events", groupId = "ledger-service-saga-group")
     @Transactional
+    public void consume(ConsumerRecord<String, String> record, Acknowledgment acknowledgment) throws Exception {
+        if (record != null && record.headers() != null) {
+            TraceContextPropagator.extractFromKafkaHeaders(record.headers())
+                    .ifPresent(TraceContextPropagator::populateMdc);
+        }
+        consume(record != null ? record.value() : null, acknowledgment);
+    }
+
     public void consume(String message, Acknowledgment acknowledgment) throws Exception {
         try {
             JsonNode rootNode = objectMapper.readTree(message);
@@ -121,6 +131,7 @@ public class LedgerSagaEventConsumer {
             log.error("Failed to process ledger event", e);
             throw e;
         } finally {
+            TraceContextPropagator.clearMdc();
             MDC.clear();
         }
     }
@@ -144,6 +155,7 @@ public class LedgerSagaEventConsumer {
                 .payload(payload)
                 .build();
 
+        var traceMetadata = TraceContextPropagator.currentTraceMetadata().orElse(null);
         OutboxEvent outboxEvent = OutboxEvent.builder()
                 .id(rejectionEnvelope.getEventId())
                 .aggregateType("ledger-events")
@@ -151,6 +163,8 @@ public class LedgerSagaEventConsumer {
                 .eventType(rejectionEnvelope.getEventType())
                 .payload(serializeEnvelope(rejectionEnvelope))
                 .status("PENDING")
+                .traceparent(traceMetadata != null ? traceMetadata.traceparent() : null)
+                .tracestate(traceMetadata != null ? traceMetadata.tracestate() : null)
                 .build();
 
         outboxEventRepository.saveAndFlush(outboxEvent);

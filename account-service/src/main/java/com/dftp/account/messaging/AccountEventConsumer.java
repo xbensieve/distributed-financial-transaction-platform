@@ -13,6 +13,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import com.dftp.common.observability.TraceContextPropagator;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
@@ -34,6 +36,14 @@ public class AccountEventConsumer {
 
     @KafkaListener(topics = {"account-events", "transaction-events"}, groupId = CONSUMER_GROUP)
     @Transactional
+    public void consume(ConsumerRecord<String, String> record, Acknowledgment acknowledgment) throws Exception {
+        if (record != null && record.headers() != null) {
+            TraceContextPropagator.extractFromKafkaHeaders(record.headers())
+                    .ifPresent(TraceContextPropagator::populateMdc);
+        }
+        consume(record != null ? record.value() : null, acknowledgment);
+    }
+
     public void consume(String message, Acknowledgment acknowledgment) throws Exception {
         try {
             JsonNode rootNode = objectMapper.readTree(message);
@@ -119,6 +129,7 @@ public class AccountEventConsumer {
             log.error("Failed to process event", e);
             throw e;
         } finally {
+            TraceContextPropagator.clearMdc();
             MDC.clear();
         }
     }

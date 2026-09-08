@@ -19,14 +19,23 @@ public class OutboxEventService {
     private final OutboxRelayProperties properties;
 
     /**
-     * Claims up to a batch size of events for processing.
-     * Uses FOR UPDATE SKIP LOCKED to prevent concurrent relay instances from claiming the same rows.
+     * Claims up to a batch size of events for processing using default worker identifier.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<OutboxEvent> claimEventsForPublishing() {
+        return claimEventsForPublishing("worker-" + Thread.currentThread().getName());
+    }
+
+    /**
+     * Claims up to a batch size of events for processing with explicit worker identifier.
+     * Uses FOR UPDATE SKIP LOCKED to prevent concurrent relay instances from claiming the same rows.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public List<OutboxEvent> claimEventsForPublishing(String workerId) {
         List<OutboxEvent> events = outboxEventRepository.findEventsForProcessing(properties.getBatchSize());
         for (OutboxEvent event : events) {
             event.setStatus("CLAIMED");
+            event.setClaimedBy(workerId);
             // updatedAt is automatically set by @PreUpdate
         }
         if (!events.isEmpty()) {

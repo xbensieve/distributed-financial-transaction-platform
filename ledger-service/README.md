@@ -1,78 +1,162 @@
-# Ledger Service
+# ledger-service
 
-The Ledger Service is the authoritative owner of the financial accounting record in the Distributed Financial Transaction Platform.
+> Immutable double-entry general ledger — the authoritative financial source of truth.
 
-## Core Responsibilities
-- Maintain an immutable, double-entry financial ledger.
-- Ingest `TransactionConfirmed` events to produce exact, balanced accounting entries (`postings`).
-- Produce `LedgerTransactionPosted` events for downstream services via the Outbox pattern.
+## Role in DFTP
 
-## Accounting Invariants
-The Ledger strictly enforces the fundamental double-entry invariant:
+The Ledger Service is the **final financial authority** in the platform. Every successful fund transfer culminates in an append-only, immutable double-entry journal entry where total debits strictly equal total credits. Account balances in `account-service` are operational projections; the ledger is the canonical accounting record.
+
+Once a journal entry is committed, it cannot be modified or deleted — not by the application, not by raw SQL. Historical corrections are performed exclusively through compensating (reversal) transactions.
+
+## Bounded Context
+
+| Concern | Ownership |
+| :--- | :--- |
+| Double-entry journal entries | ✅ Authoritative (financial source of truth) |
+| Posting immutability | ✅ Enforced at DB engine level |
+| Account projections | Eventually consistent replica |
+| Account balances | ❌ Operational state in `account-service` |
+| Transfer intent | ❌ Owned by `transaction-service` |
+
+## Accounting Invariant
+
+For every committed ledger transaction:
+
 ```
-SUM(Debits) = SUM(Credits)
-```
-This is enforced at two independent protection layers:
-
-1. **Application Level (first barrier):** `LedgerApplicationService.postTransaction()` validates that the debit and credit amounts match before writing to the database. This catches obvious violations early and provides clear error messages.
-
-2. **Database Level (final authority):** A PostgreSQL `DEFERRABLE INITIALLY DEFERRED` constraint trigger (`check_ledger_balance`) in `V1__init_ledger_schema.sql` guarantees that no transaction can commit unbalanced postings. This fires at `COMMIT` time and rejects the entire transaction if `SUM(DEBIT) - SUM(CREDIT) != 0`. The database is the final arbiter — even if the application-level check is bypassed, the database will reject the invalid state.
-
-## Idempotency and Concurrency Semantics
-Two independent deduplication layers protect against duplicate financial effects:
-
-- **Transport Idempotency (Inbox — `eventId`):** The `TransactionEventConsumer` checks the `inbox_messages` table by `eventId` before processing. If the same `eventId` has already been processed, the event is silently acknowledged. This protects against Kafka delivering the same message multiple times (transport-level redelivery).
-
-- **Business Idempotency (Database — `business_transaction_id`):** The `ledger_transactions` table has a `UNIQUE` constraint on `business_transaction_id`. If two messages with different `eventId`s carry the same `transactionId` (business intent), the second thread's `INSERT` will violate the unique constraint. `LedgerApplicationService` catches the resulting `DataIntegrityViolationException` and treats it as an idempotent success — it returns without throwing, preventing infinite Kafka retry loops.
-
-Identity boundary:
-```
-eventId         = message identity (transport deduplication via Inbox)
-transactionId   = business operation identity (financial deduplication via UNIQUE constraint)
+∑ Debits − ∑ Credits ≡ 0.0000
 ```
 
-## Immutability Policy
-Accounting history is strictly immutable, enforced at two levels:
+This is enforced at **two independent levels**:
 
-- **Application Level:** JPA entity fields (`LedgerTransaction`, `Posting`) are annotated with `updatable=false`, preventing accidental mutation through the application ORM layer.
+1. **Application:** `LedgerApplicationService.postTransaction()` validates debit/credit balance before writing.
+2. **Database:** PostgreSQL `DEFERRABLE INITIALLY DEFERRED` constraint trigger `ensure_ledger_balance` fires at `COMMIT` time — rejecting the entire transaction if the posting group is unbalanced. The database is the final arbiter.
 
-- **Database Level:** PostgreSQL `BEFORE UPDATE` and `BEFORE DELETE` triggers defined in `V1__init_ledger_schema.sql` reject any attempt to modify or delete committed accounting records — including raw SQL executed outside the application. Any historical correction must be performed via a compensating (reversal) transaction, not by mutating existing records.
+## Immutability
 
-## Account Projection and Eventual Consistency
-The Ledger maintains a local projection of accounts populated via `AccountCreated` events from the Account Service.
+Enforced at **two independent levels**:
 
-If a `TransactionConfirmed` event arrives for an account that the Ledger does not yet know about, the account is treated as **temporarily unknown** (not "definitely invalid"). The service throws a retryable `RuntimeException`, causing the Kafka consumer to redeliver the message according to the configured Spring Kafka consumer retry and backpressure policy. Once the `AccountCreated` event arrives and populates the local projection, the transaction will successfully process on the next retry.
+| Layer | Mechanism |
+| :--- | :--- |
+| Application | JPA fields annotated `updatable = false` |
+| Database | `BEFORE UPDATE` and `BEFORE DELETE` triggers reject all mutations to `ledger_transactions` and `postings` |
 
-If retries are exhausted, the message is routed to the Dead Letter Topic (DLT). Recovery from the DLT requires manual operational replay. Automatic recovery from DLT is **not** currently implemented.
+## Domain Model
 
-## System Clearing Account (Temporary Workaround)
+```java
+LedgerTransaction {
+    id: UUID                        // Internal PK
+    ledgerTransactionId: String     // Ledger identity (UNIQUE, updatable=false)
+    businessTransactionId: String   // Business tx identity (UNIQUE, updatable=false)
+    status: String                  // POSTED
+    createdAt: Instant              // updatable=false
+}
 
-**Current Phase 05 Scope:** `TransactionConfirmed` events represent single-account intents. To fulfill the strict double-entry requirement, the Ledger automatically credits a `SYSTEM_CLEARING_ACCOUNT`:
+Posting {
+    id: UUID
+    ledgerTransaction: LedgerTransaction  // FK (updatable=false)
+    accountId: UUID                       // updatable=false
+    amount: BigDecimal                    // updatable=false
+    currency: String                      // updatable=false
+    postingType: PostingType              // DEBIT | CREDIT (updatable=false)
+    createdAt: Instant                    // updatable=false
+}
+
+PostingType { DEBIT, CREDIT }
+
+AccountReference {
+    id: UUID
+    accountId: UUID                // Local projection from AccountCreated events
+}
 ```
-UUID: 00000000-0000-0000-0000-000000000000
+
+## API
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/ledger/transactions/{ledgerTransactionId}` | Retrieve by ledger ID |
+| `GET` | `/ledger/transactions/by-transaction/{businessTransactionId}` | Retrieve by business tx ID |
+
+No public write endpoints. Ledger mutations are **event-driven only**.
+
+## Database
+
+**Schema:** `ledger_db` (PostgreSQL 16, Flyway-managed)
+
+| Table | Purpose |
+| :--- | :--- |
+| `ledger_transactions` | Journal entry headers with `UNIQUE(business_transaction_id)` |
+| `postings` | Debit/credit line items with `amount > 0` constraint |
+| `account_references` | Eventually consistent account projection |
+
+**Triggers:**
+
+| Trigger | Purpose |
+| :--- | :--- |
+| `ensure_ledger_balance` | Deferred constraint: `∑DEBIT = ∑CREDIT` per posting group at commit |
+| `prevent_ledger_transaction_update` | Rejects `UPDATE` on `ledger_transactions` |
+| `prevent_ledger_transaction_delete` | Rejects `DELETE` on `ledger_transactions` |
+| `prevent_posting_update` | Rejects `UPDATE` on `postings` |
+| `prevent_posting_delete` | Rejects `DELETE` on `postings` |
+
+Shared tables from `common-infrastructure`: `outbox_events`, `inbox_messages`.
+
+## Events
+
+**Consumed** (topics: `transaction-events`, `account-events`):
+
+| Event | Source | Action |
+| :--- | :--- | :--- |
+| `LedgerPostRequested` | transaction-service | Create double-entry journal posting |
+| `AccountCreated` | account-service | Populate local account reference projection |
+
+**Produced** (topic: `transaction-saga-events`):
+
+| Event | Trigger |
+| :--- | :--- |
+| `LedgerTransactionPosted` | Journal entry committed successfully |
+| `LedgerPostRejected` | Validation failed (amount ≤ 0, source = dest, etc.) |
+
+## Idempotency Layers
+
+1. **Transport (Inbox):** `eventId` deduplication via `inbox_messages` with `INSERT ... ON CONFLICT DO NOTHING`.
+2. **Business (DB constraint):** `UNIQUE(business_transaction_id)` on `ledger_transactions`. A second event with a different `eventId` but the same `transactionId` catches `DataIntegrityViolationException` and treats it as idempotent success — preventing infinite Kafka retry loops.
+
+**Critical distinction:**
 ```
-This is an explicit **temporary implementation workaround**. It is NOT a final domain model for multi-party settlement. Future phases will introduce an explicit multi-party transfer, clearing, or treasury domain definition to replace this workaround.
-
-## Outbox Reliability and Kafka Semantics
-
-The service uses an Outbox pattern for publishing `LedgerTransactionPosted` events:
-
-1. `LedgerTransaction`, `Postings`, and `OutboxEvent` are committed atomically in one local PostgreSQL ACID transaction. If any of the three writes fails, the entire transaction rolls back.
-
-2. The Outbox Relay (`OutboxRelay.java`), a `@Scheduled` polling process, claims PENDING outbox events and publishes them to Kafka. If the Kafka send succeeds, the event is marked PUBLISHED. If the send fails (e.g., Kafka unavailable), the event is reset to PENDING and retried on the next polling cycle.
-
-3. **At-least-once publication:** If the relay publishes successfully but crashes before marking the event as PUBLISHED, the event will be republished on the next relay cycle (after the CLAIMED timeout window expires). Downstream consumer services must enforce their own inbox/idempotency checks to handle duplicate deliveries.
-
-4. **Not exactly-once:** The system does NOT claim exactly-once Kafka publication. The guarantee is at-least-once publication with idempotent consumers.
-
-## Event Key and Ordering
-All Ledger outbox events for the same business transaction use `transactionId` as the Kafka message key (`OutboxRelay` sends with `aggregateId`). This provides **partition-scoped ordering** — all events for the same transaction are delivered to the same partition in order. **Global ordering across partitions is NOT guaranteed.**
-
-## Correlation and Causation Chain
-The Ledger preserves the full event lineage:
+eventId         = message identity     (transport deduplication via Inbox)
+transactionId   = business identity    (financial deduplication via UNIQUE constraint)
 ```
-TransactionConfirmed (inbound)
+
+## Account Projection & Eventual Consistency
+
+The Ledger maintains a local projection of known accounts populated from `AccountCreated` events. If a `LedgerPostRequested` arrives for an unknown account:
+
+- The service throws a **retryable** `RuntimeException`
+- Kafka consumer retries with exponential backoff
+- Once the `AccountCreated` event arrives, the posting succeeds on the next retry
+- If retries are exhausted, the message is routed to the Dead Letter Topic (DLT)
+
+## Event Lineage
+
+The Ledger preserves the full causal chain:
+
+```
+LedgerPostRequested (inbound)
   → eventId, transactionId, correlationId
     → LedgerTransactionPosted (outbound)
-      → new eventId, same transactionId, same correlationId, causationId = inbound eventId
+      → new eventId
+      → same transactionId
+      → same correlationId
+      → causationId = inbound eventId
+```
+
+## Test Suite
+
+```
+LedgerIntegrationTest                        — Full posting lifecycle, balance trigger, immutability
+OutboxInboxReliabilityIntegrationTest        — Atomic outbox + inbox under failure
+InboxIntegrationTest                         — Deduplication and concurrent delivery
+OutboxIntegrationTest                        — Outbox claim lifecycle
+KafkaRebalanceIntegrationTest                — Consumer group rebalance resilience
+CiValidationTest                             — Build validation gate
 ```

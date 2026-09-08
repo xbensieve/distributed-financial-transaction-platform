@@ -1,39 +1,124 @@
-# Transaction Service
+# transaction-service
 
-The **Transaction Service** is the second business domain service on the Distributed Financial Transaction Platform. It establishes the domain for business transactions and coordinates with the Account Service via asynchronous messaging.
+> Saga orchestrator, transaction lifecycle owner, reconciliation scanner, and batch settlement engine.
 
-## Responsibilities
-- **Transaction Intent**: Captures and validates requests to execute a transaction.
-- **Transaction Identity**: Owns the unique `transactionId` business identifier for idempotency.
-- **Transaction State**: Manages the state machine (PENDING, CONFIRMED, REJECTED).
-- **Eventual Consistency**: Listens to Account events to maintain a local, eventually consistent projection of valid accounts.
+## Role in DFTP
+
+The Transaction Service is the **Saga Orchestrator** — it owns the lifecycle of every distributed financial transfer across the platform. It does not own money; it owns _transaction intent and state progression_. Fund mutations are delegated to `account-service`, and accounting records to `ledger-service` via asynchronous Kafka events.
+
+## Bounded Context
+
+| Concern | Ownership |
+| :--- | :--- |
+| Transaction intent & identity | ✅ Authoritative |
+| State machine progression | ✅ Authoritative |
+| Account projections | Eventually consistent replica |
+| Fund balances | ❌ Delegated to `account-service` |
+| Accounting journal | ❌ Delegated to `ledger-service` |
 
 ## State Machine
-The simplified state machine for Phase 04:
-```text
-PENDING -> CONFIRMED (if Account is valid in projection)
-PENDING -> REJECTED  (if Account validation fails at business layer later, currently we reject synchronously at POST if missing)
+
 ```
-*Note: We transition to CONFIRMED directly if the account is in the projection. True multi-step transitions will occur in later phases (e.g. Ledger).*
+PENDING ──→ SOURCE_HELD ──→ LEDGER_POSTED ──→ COMPLETED
+   │              │
+   ▼              ▼
+ FAILED       COMPENSATING ──→ FAILED
+```
+
+`LEDGER_POSTED` is the **financial pivot point**. Once the ledger has committed the double-entry journal, no automatic Saga rollback is permitted. Post-pivot failures require explicit compensating transactions through reconciliation.
 
 ## API
-- `POST /transactions`: Creates a transaction intent.
-- `GET /transactions/{id}`: Retrieves transaction state.
 
-## Database Ownership
-The Transaction Service completely owns the `dftp_transactions` PostgreSQL database. It never accesses the `account-service` database.
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `POST` | `/transactions` | Create a transfer (requires `Idempotency-Key` header) |
+| `GET` | `/transactions/{id}` | Retrieve by internal UUID |
+| `GET` | `/transactions/by-transaction-id/{txId}` | Retrieve by business transaction ID |
+
+**Port:** `8082`
+
+## Domain Model
+
+```java
+Transaction {
+    id: UUID                    // Internal PK
+    transactionId: String       // Business identity (UNIQUE)
+    ownerId: String             // Authenticated principal
+    sourceAccountId: UUID       // Source account reference
+    destinationAccountId: UUID  // Destination account reference
+    amount: BigDecimal          // Transfer amount
+    currency: String            // ISO currency code
+    status: String              // State machine position
+    version: Long               // Optimistic locking (@Version)
+    createdAt: Instant
+    updatedAt: Instant
+}
+```
+
+## Database
+
+**Schema:** `transaction_db` (PostgreSQL 16, Flyway-managed)
+
+| Table | Purpose |
+| :--- | :--- |
+| `transactions` | Transaction entities with `UNIQUE(transaction_id)` and `@Version` |
+| `account_references` | Eventually consistent projection of known accounts |
+| `outbox_events` | Transactional Outbox (shared schema from `common-infrastructure`) |
+| `inbox_messages` | Consumer deduplication (shared schema) |
+| `shedlock` | Distributed job coordination |
 
 ## Events
-**Consumed**:
-- `AccountCreated` (from `account-events` topic). Used to populate the `account_references` local projection.
 
-**Produced**:
-- `TransactionConfirmed` (to `transaction-events` topic). Emitted atomically alongside the database transaction commit using the Outbox pattern.
+**Consumed** (topics: `account-events`, `ledger-events`):
 
-## Idempotency Policy
-Duplicate HTTP POSTs specifying the exact same `transactionId` will not result in a new database entry and will not emit duplicate business events. The service will safely return the original transaction state.
+| Event | Source | Saga Transition |
+| :--- | :--- | :--- |
+| `FundsHeld` | account-service | PENDING → SOURCE_HELD |
+| `FundsHoldRejected` | account-service | PENDING → FAILED |
+| `LedgerTransactionPosted` | ledger-service | SOURCE_HELD → LEDGER_POSTED |
+| `LedgerPostRejected` | ledger-service | SOURCE_HELD → COMPENSATING |
+| `FundsSettled` | account-service | LEDGER_POSTED → COMPLETED |
+| `HoldCompensated` | account-service | COMPENSATING → FAILED |
+| `AccountCreated` | account-service | Updates local projection |
 
-## Failure Behavior & Local Execution
-- **HTTP Timeout / Client Retry**: Safe due to `transactionId` idempotency.
-- **Kafka Unavailability**: Business transaction commits successfully; Outbox Relay will infinitely retry event publication.
-- **Event Delay (Account)**: If an account is created but its event is delayed, the Transaction Service will reject transactions for it until the local projection is updated via Kafka.
+**Produced** (topic: `transaction-events`):
+
+| Event | Trigger |
+| :--- | :--- |
+| `FundsHoldRequested` | Transaction created (PENDING) |
+| `LedgerPostRequested` | Funds held (SOURCE_HELD) |
+| `FundsSettlementRequested` | Ledger posted (LEDGER_POSTED) |
+| `HoldCompensationRequested` | Ledger rejected (COMPENSATING) |
+
+## Key Subsystems
+
+| Package | Responsibility |
+| :--- | :--- |
+| `reconciliation/` | `ReconciliationScannerService` — cross-service drift detection (ShedLock-coordinated) |
+| `settlement/` | Batch settlement engine with `SKIP LOCKED` claim |
+| `backpressure/` | Kafka consumer backpressure management |
+| `retention/` | `DataRetentionPurgeService` — bounded outbox/inbox cleanup |
+| `security/` | JWT/OAuth2 integration, owner-scoped access control |
+
+## Idempotency
+
+- **HTTP:** `UNIQUE(transaction_id)` constraint prevents duplicate creation. Replay returns the existing transaction.
+- **Events:** Inbox deduplication by `eventId` + state guards prevent stale/duplicate transitions.
+- **Optimistic locking:** `@Version` prevents concurrent state overwrites.
+
+## Test Suite
+
+```
+TransactionIntegrationTest             — CRUD, idempotency, account projection
+TransactionSagaIntegrationTest         — Full Saga state transitions
+TransactionAdversarialStateTest        — Illegal/out-of-order transitions
+TransactionCompletionGuardTest         — Terminal state protection
+TransactionCrashRecoveryTest           — Service restart mid-Saga
+TransactionStaleEventProtectionTest    — Stale/replayed event rejection
+load/ConcurrencyAndLoadSaturationIntegrationTest  — 50-thread burst, partition balance
+lock/DistributedLockIntegrationTest    — ShedLock mutual exclusion proof
+reconciliation/                        — Scanner correctness tests
+settlement/                            — Batch claim + SKIP LOCKED tests
+tracing/                               — W3C traceparent propagation
+resilience/                            — Chaos scenarios
+```
